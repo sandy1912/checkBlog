@@ -1,5 +1,3 @@
-<!-- src/views/EditPost.vue -->
-
 <template>
   <div class="edit-post-page">
     <div v-if="loading" class="loading">Loading...</div>
@@ -16,6 +14,7 @@
           <textarea v-model="post.content" id="content" required></textarea>
         </div>
         <button type="submit" class="button">Update Post</button>
+        <button @click="deletePost" class="button delete-button">Delete Post</button>
       </form>
     </div>
   </div>
@@ -67,6 +66,21 @@ const updatePost = async () => {
     router.push(`/posts/${post.value.slug}`)
   } catch (err) {
     alert('Failed to update the post.')
+    console.error(err)
+  }
+}
+
+const deletePost = async () => {
+  try {
+    await axios.delete(`https://interns-blog.nafistech.com/api/posts/${post.value.id}`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    })
+    alert('Post deleted successfully.')
+    router.push('/posts') // Redirect to posts list
+  } catch (err) {
+    alert('Failed to delete the post.')
     console.error(err)
   }
 }
@@ -125,6 +139,14 @@ button {
 button:hover {
   background-color: #87ceeb;
   color: #fff;
+}
+
+.delete-button {
+  background-color: #ff6f6f;
+}
+
+.delete-button:hover {
+  background-color: #ff4d4d;
 }
 
 .loading,

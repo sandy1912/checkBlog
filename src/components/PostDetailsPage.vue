@@ -3,6 +3,10 @@
     <div v-if="loading" class="loading">Loading...</div>
     <div v-if="error" class="error">{{ error }}</div>
     <div v-if="post">
+      <!-- Post Image -->
+      <img src="../assets/thumbnail.jpeg" alt="Post Thumbnail" class="post-image" />
+
+      <!-- Edit Post Form -->
       <div v-if="isEditing" class="edit-post-form">
         <h2>Edit Post</h2>
         <form @submit.prevent="updatePost">
@@ -19,6 +23,7 @@
         </form>
       </div>
 
+      <!-- Post View -->
       <div v-else class="post-view">
         <h2>{{ post.title }}</h2>
         <p><strong>Content:</strong> {{ post.content }}</p>
@@ -26,7 +31,8 @@
         <p><strong>Post ID:</strong> {{ post.id }}</p>
         <p><strong>Slug:</strong> {{ post.slug }}</p>
 
-        <div v-if="isPostOwner" class="actions">
+        <!-- Only show edit/delete buttons to post owner -->
+        <div v-if="isPostOwner()" class="actions">
           <button @click="startEdit" class="button edit-button">
             <i class="fas fa-edit"></i> Edit Post
           </button>
@@ -36,23 +42,52 @@
         </div>
       </div>
 
+      <!-- Comments Section -->
       <div class="comments-section">
         <h3>Comments</h3>
         <div v-if="post.comments.length === 0" class="no-comments">No comments available</div>
         <div v-for="comment in post.comments" :key="comment.id" class="comment">
           <p>
-            <strong>{{ comment.user.name }}:</strong> {{ comment.content }}
+            <strong>{{ comment.user.name }}:</strong>
+            <span v-if="commentToEdit !== comment.id">{{ comment.content }}</span>
+            <span v-else>
+              <textarea v-model="editedCommentContent" rows="2" required></textarea>
+            </span>
           </p>
-          <div v-if="isCommentOwner(comment.user.id)" class="comment-actions">
-            <button @click="editComment(comment.id)" class="button edit-comment-button">
+          <!-- Only show edit/delete buttons to comment owner -->
+          <div v-if="isCommentOwner(comment.user.id)">
+            <button
+              v-if="commentToEdit !== comment.id"
+              @click="editComment(comment.id)"
+              class="button edit-comment-button"
+            >
               <i class="fas fa-edit"></i> Edit Comment
             </button>
-            <button @click="deleteComment(comment.id)" class="button delete-comment-button">
+            <button
+              v-if="commentToEdit === comment.id"
+              @click="updateComment"
+              class="button update-comment-button"
+            >
+              <i class="fas fa-check"></i> Save Changes
+            </button>
+            <button
+              v-if="commentToEdit === comment.id"
+              @click="cancelEditComment"
+              class="button cancel-edit-comment-button"
+            >
+              <i class="fas fa-times"></i> Cancel
+            </button>
+            <button
+              v-if="commentToEdit !== comment.id"
+              @click="deleteComment(comment.id)"
+              class="button delete-comment-button"
+            >
               <i class="fas fa-trash"></i> Delete Comment
             </button>
           </div>
         </div>
-        <div v-if="isPostOwner" class="add-comment">
+        <!-- Add Comment Field -->
+        <div class="add-comment">
           <textarea v-model="newComment" placeholder="Add a comment..." rows="3"></textarea>
           <button @click="addComment" class="button add-comment-button">
             <i class="fas fa-plus"></i> Add Comment
@@ -76,6 +111,8 @@ const error = ref('')
 const isEditing = ref(false)
 const token = localStorage.getItem('token')
 const newComment = ref('')
+const commentToEdit = ref<number | null>(null)
+const editedCommentContent = ref('')
 
 const apiBaseUrl = 'https://interns-blog.nafistech.com/api'
 
@@ -92,7 +129,7 @@ const fetchPostDetails = async () => {
       }
     })
     if (response.status === 200) {
-      post.value = response.data
+      post.value = response.data.data
     } else {
       error.value = `Error: ${response.statusText}`
     }
@@ -107,7 +144,7 @@ const fetchPostDetails = async () => {
 const updatePost = async () => {
   try {
     const response = await axios.put(
-      `${apiBaseUrl}/posts/${post.value.slug}`,
+      `${apiBaseUrl}/posts/${post.value.id}`,
       {
         title: post.value.title,
         content: post.value.content
@@ -185,7 +222,7 @@ const addComment = async () => {
   }
   try {
     const response = await axios.post(
-      `${apiBaseUrl}/posts/${route.params.slug}/comments`,
+      `${apiBaseUrl}/posts/${post.value.id}/comments`,
       {
         content: newComment.value
       },
@@ -213,6 +250,55 @@ const addComment = async () => {
   }
 }
 
+const editComment = (commentId: number) => {
+  const comment = post.value.comments.find((c: any) => c.id === commentId)
+  if (comment) {
+    commentToEdit.value = commentId
+    editedCommentContent.value = comment.content
+  }
+}
+
+const updateComment = async () => {
+  if (!editedCommentContent.value.trim()) {
+    alert('Comment cannot be empty.')
+    return
+  }
+  try {
+    const response = await axios.put(
+      `${apiBaseUrl}/comments/${commentToEdit.value}`,
+      {
+        content: editedCommentContent.value
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+    if (response.status === 200) {
+      alert('Comment updated successfully.')
+      commentToEdit.value = null
+      editedCommentContent.value = ''
+      fetchPostDetails() // Refresh comments
+    } else {
+      alert('Failed to update comment.')
+      console.error('Unexpected response status:', response.status, response.statusText)
+    }
+  } catch (err) {
+    const errorMsg = err.response
+      ? `Error ${err.response.status}: ${err.response.data.message || err.response.data}`
+      : `Error: ${err.message}`
+    alert('Failed to update comment.')
+    console.error('Update Comment Error:', errorMsg)
+  }
+}
+
+const cancelEditComment = () => {
+  commentToEdit.value = null
+  editedCommentContent.value = ''
+}
+
 const isPostOwner = () => {
   const currentUserId = JSON.parse(localStorage.getItem('user') || '{}').id
   return post.value && post.value.user.id === currentUserId
@@ -229,19 +315,28 @@ onMounted(fetchPostDetails)
 <style scoped>
 .post-details-page {
   background-color: #e0f7fa; /* Light baby blue background */
-  color: #00796b; /* Darker blue text color */
+  color: #5a2a8f; /* Dark purple text color */
   padding: 20px;
   font-family: Arial, sans-serif;
+  text-align: center; /* Center align the content */
 }
 
 .loading {
   font-size: 1.5rem;
-  color: #00796b;
+  color: #5a2a8f;
 }
 
 .error {
   color: red;
   font-size: 1.125rem;
+}
+
+.post-image {
+  max-width: 300px; /* Adjust the size as needed */
+  height: auto; /* Maintain aspect ratio */
+  border-radius: 10px;
+  margin: 0 auto; /* Center the image horizontally */
+  display: block; /* Make the image a block element */
 }
 
 .post-view,
@@ -250,83 +345,72 @@ onMounted(fetchPostDetails)
   background-color: #ffffff;
   border-radius: 10px;
   padding: 20px;
-  margin: 20px 0;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin: 20px auto; /* Center the sections horizontally */
+  max-width: 800px; /* Limit the width of the sections */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.edit-post-form h2,
-.comments-section h3 {
-  color: #00796b;
+.edit-post-form,
+.comments-section {
+  background-color: #f3e5f5; /* Light purple background for the forms */
 }
 
 .form-group {
-  margin-bottom: 15px;
+  margin-bottom: 1rem;
 }
 
-label {
+.form-group label {
   display: block;
-  margin-bottom: 5px;
-  font-weight: bold;
+  margin-bottom: 0.5rem;
 }
 
-input,
-textarea {
+.form-group input,
+.form-group textarea {
   width: 100%;
-  padding: 10px;
-  border: 1px solid #00796b;
+  padding: 0.5rem;
   border-radius: 5px;
+  border: 1px solid #ddd;
 }
 
-textarea {
-  resize: vertical;
-}
-
-.button {
-  background-color: #00796b;
-  color: #ffffff;
-  padding: 10px 15px;
+button.button {
+  background-color: #ab47bc; /* Purple button */
+  color: #fff;
   border: none;
   border-radius: 5px;
+  padding: 10px 20px;
   cursor: pointer;
+  font-size: 1rem;
+  margin-right: 10px;
 }
 
-.button:hover {
-  background-color: #004d40;
+button.button:hover {
+  background-color: #8e24aa; /* Darker purple on hover */
 }
 
-.update-button {
-  background-color: #004d40;
-}
-
-.cancel-button {
-  background-color: #b2dfdb;
-}
-
-.delete-button {
-  background-color: #e57373;
-}
-
-.edit-button,
-.delete-comment-button,
-.add-comment-button {
-  background-color: #4fc3f7;
+.add-comment textarea {
+  width: calc(100% - 22px); /* Adjust for padding and button */
+  padding: 10px;
+  margin-bottom: 10px;
+  border-radius: 5px;
+  border: 1px solid #ddd;
 }
 
 .comment-actions,
-.add-comment {
-  margin-top: 20px;
+.actions {
+  margin-top: 10px;
+}
+
+.comment-actions button,
+.actions button {
+  background-color: #d32f2f; /* Red button for delete actions */
+}
+
+.comment-actions button:hover,
+.actions button:hover {
+  background-color: #b71c1c; /* Darker red on hover */
 }
 
 .no-comments {
   font-style: italic;
-  color: #00796b;
-}
-
-.comment {
-  margin-bottom: 15px;
-}
-
-.comment-actions button {
-  margin-right: 5px;
 }
 </style>
