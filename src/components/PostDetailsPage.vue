@@ -4,7 +4,11 @@
     <div v-if="error" class="error">{{ error }}</div>
     <div v-if="post">
       <!-- Post Image -->
-      <img src="../assets/thumbnail.jpeg" alt="Post Thumbnail" class="post-image" />
+      <img
+        :src="post.image || '../assets/thumbnail.jpeg'"
+        alt="Post Thumbnail"
+        class="post-image"
+      />
 
       <!-- Edit Post Form -->
       <div v-if="isEditing" class="edit-post-form">
@@ -30,15 +34,29 @@
         <p><strong>Author:</strong> {{ post.user.name }}</p>
         <p><strong>Post ID:</strong> {{ post.id }}</p>
         <p><strong>Slug:</strong> {{ post.slug }}</p>
+        <p><strong>Comments Count:</strong> {{ post.comments_count }}</p>
+        <p><strong>Created At:</strong> {{ post.created_at_readable }}</p>
+        <p><strong>Updated At:</strong> {{ post.updated_at_readable }}</p>
 
-        <!-- Only show edit/delete buttons to post owner -->
-        <div v-if="isPostOwner()" class="actions">
-          <button @click="startEdit" class="button edit-button">
-            <i class="fas fa-edit"></i> Edit Post
+        <!-- Show edit/delete buttons only if the user is the owner -->
+        <div v-if="isPostOwner" class="actions">
+          <button @click="startEdit" class="button edit-button">Edit</button>
+          <button @click="deletePost" class="button delete-button">Delete</button>
+        </div>
+
+        <!-- Like Button and Count -->
+        <div class="likes">
+          <button @click="toggleLike(post)" :class="{ liked: post.liked_by_user }">
+            {{ post.liked_by_user ? 'Unlike' : 'Like' }} ({{ post.likes_count }})
           </button>
-          <button @click="deletePost(post.id)" class="button delete-button">
-            <i class="fas fa-trash"></i> Delete Post
-          </button>
+        </div>
+
+        <!-- Users Who Liked the Post -->
+        <div class="liked-users" v-if="post.liked_users && post.liked_users.length > 0">
+          <h3>Liked by:</h3>
+          <ul>
+            <li v-for="user in post.liked_users" :key="user.id">{{ user.name }}</li>
+          </ul>
         </div>
       </div>
 
@@ -55,44 +73,52 @@
             </span>
           </p>
           <!-- Only show edit/delete buttons to comment owner -->
-          <div v-if="isCommentOwner(comment.user.id)">
+          <div v-if="isCommentOwner(comment.user.id)" class="comment-actions">
             <button
               v-if="commentToEdit !== comment.id"
               @click="editComment(comment.id)"
               class="button edit-comment-button"
             >
-              <i class="fas fa-edit"></i> Edit Comment
+              Edit Comment
             </button>
             <button
               v-if="commentToEdit === comment.id"
               @click="updateComment"
               class="button update-comment-button"
             >
-              <i class="fas fa-check"></i> Save Changes
+              Save Changes
             </button>
             <button
               v-if="commentToEdit === comment.id"
               @click="cancelEditComment"
               class="button cancel-edit-comment-button"
             >
-              <i class="fas fa-times"></i> Cancel
+              Cancel
             </button>
             <button
               v-if="commentToEdit !== comment.id"
               @click="deleteComment(comment.id)"
               class="button delete-comment-button"
             >
-              <i class="fas fa-trash"></i> Delete Comment
+              Delete Comment
             </button>
           </div>
         </div>
+
         <!-- Add Comment Field -->
         <div class="add-comment">
           <textarea v-model="newComment" placeholder="Add a comment..." rows="3"></textarea>
-          <button @click="addComment" class="button add-comment-button">
-            <i class="fas fa-plus"></i> Add Comment
-          </button>
+          <button @click="addComment" class="button add-comment-button">Add Comment</button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="showDeleteModal" class="modal-overlay">
+      <div class="modal-content">
+        <h2>Confirm Deletion</h2>
+        <p>Are you sure you want to delete this post?</p>
+        <button @click="deletePost">Yes, Delete</button>
+        <button @click="cancelDelete">Cancel</button>
       </div>
     </div>
   </div>
@@ -103,17 +129,45 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 
+interface User {
+  id: number
+  name: string
+}
+
+interface Comment {
+  id: number
+  content: string
+  user: User
+}
+
+interface Post {
+  id: number
+  title: string
+  content: string
+  slug: string
+  user: User
+  comments: Comment[]
+  liked_users: User[]
+  likes_count: number
+  liked_by_user: boolean
+  comments_count: number
+  created_at_readable: string
+  updated_at_readable: string
+  image: string
+}
+
 const route = useRoute()
 const router = useRouter()
-const post = ref<any>(null)
+const post = ref<Post | null>(null)
 const loading = ref(true)
 const error = ref('')
 const isEditing = ref(false)
+const isPostOwner = ref(false)
 const token = localStorage.getItem('token')
 const newComment = ref('')
 const commentToEdit = ref<number | null>(null)
 const editedCommentContent = ref('')
-
+const currentUserId = ref<string>('')
 const apiBaseUrl = 'https://interns-blog.nafistech.com/api'
 
 const fetchPostDetails = async () => {
@@ -130,6 +184,8 @@ const fetchPostDetails = async () => {
     })
     if (response.status === 200) {
       post.value = response.data.data
+      const currentUserId = Number(localStorage.getItem('userId'))
+      isPostOwner.value = post.value?.user.id === currentUserId
     } else {
       error.value = `Error: ${response.statusText}`
     }
@@ -142,9 +198,10 @@ const fetchPostDetails = async () => {
 }
 
 const updatePost = async () => {
+  if (!post.value) return
   try {
     const response = await axios.put(
-      `${apiBaseUrl}/posts/${post.value.id}`,
+      `${apiBaseUrl}/posts/${post.value.slug}`,
       {
         title: post.value.title,
         content: post.value.content
@@ -159,6 +216,7 @@ const updatePost = async () => {
     if (response.status === 200) {
       alert('Post updated successfully.')
       isEditing.value = false
+      fetchPostDetails()
     } else {
       alert('Failed to update the post.')
     }
@@ -174,38 +232,62 @@ const startEdit = () => {
 
 const cancelEdit = () => {
   isEditing.value = false
-  fetchPostDetails() // Reload post to discard unsaved changes
+  fetchPostDetails()
 }
 
-const deletePost = async (id: number) => {
-  try {
-    const response = await axios.delete(`${apiBaseUrl}/posts/${id}`, {
-      headers: {
-        Authorization: `Bearer ${token}`
+// const deletePost = async () => {
+//   try {
+//     const response = await axios.delete(`${apiBaseUrl}/posts/${post.value?.id}`, {
+//       headers: {
+//         Authorization: `Bearer ${token}`
+//       }
+//     })
+//     if (response.status === 200) {
+//       alert('Post deleted successfully.')
+//       router.push('/posts')
+//     } else {
+//       alert('Failed to delete the post.')
+//     }
+//   } catch (err) {
+//     alert('Failed to delete the post.')
+//     console.error('Delete Post Error:', err)
+//   }
+// }
+
+const deletePost = async (slug: string) => {
+  const userConfirmed = window.confirm('Are you sure? This action cannot be undone!')
+
+  if (userConfirmed) {
+    try {
+      const token = localStorage.getItem('authToken')
+      if (!token) {
+        console.error('No auth token found')
+        return
       }
-    })
-    if (response.status === 200) {
-      alert('Post deleted successfully.')
-      router.push('/posts')
-    } else {
-      alert('Failed to delete the post.')
+
+      await axios.delete(`https://interns-blog.nafistech.com/api/posts/${slug}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+
+      alert('Your post has been deleted.')
+      router.push('/')
+    } catch (error) {
+      console.error('Error deleting post:', error)
+      alert('Failed to delete the post. Please try again.')
     }
-  } catch (err) {
-    alert('Failed to delete the post.')
-    console.error('Delete Post Error:', err)
   }
 }
 
-const deleteComment = async (id: number) => {
+const deleteComment = async (commentId: number) => {
   try {
-    const response = await axios.delete(`${apiBaseUrl}/comments/${id}`, {
+    const response = await axios.delete(`${apiBaseUrl}/comments/${commentId}`, {
       headers: {
         Authorization: `Bearer ${token}`
       }
     })
     if (response.status === 200) {
       alert('Comment deleted successfully.')
-      fetchPostDetails() // Refresh comments
+      fetchPostDetails()
     } else {
       alert('Failed to delete the comment.')
     }
@@ -216,42 +298,35 @@ const deleteComment = async (id: number) => {
 }
 
 const addComment = async () => {
-  if (!newComment.value.trim()) {
-    alert('Comment cannot be empty.')
-    return
-  }
+  if (!newComment.value.trim()) return
   try {
     const response = await axios.post(
-      `${apiBaseUrl}/posts/${post.value.id}/comments`,
+      `${apiBaseUrl}/comments`,
       {
-        content: newComment.value
+        content: newComment.value,
+        post_id: post.value?.id
       },
       {
         headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${token}`
         }
       }
     )
-    if (response.status === 201) {
+    if (response.status === 200) {
       alert('Comment added successfully.')
       newComment.value = ''
-      fetchPostDetails() // Refresh comments
+      fetchPostDetails()
     } else {
-      alert('Failed to add comment.')
-      console.error('Unexpected response status:', response.status, response.statusText)
+      alert('Failed to add the comment.')
     }
   } catch (err) {
-    const errorMsg = err.response
-      ? `Error ${err.response.status}: ${err.response.data.message || err.response.data}`
-      : `Error: ${err.message}`
-    alert('Failed to add comment.')
-    console.error('Add Comment Error:', errorMsg)
+    alert('Failed to add the comment.')
+    console.error('Add Comment Error:', err)
   }
 }
 
 const editComment = (commentId: number) => {
-  const comment = post.value.comments.find((c: any) => c.id === commentId)
+  const comment = post.value?.comments.find((c) => c.id === commentId)
   if (comment) {
     commentToEdit.value = commentId
     editedCommentContent.value = comment.content
@@ -259,10 +334,7 @@ const editComment = (commentId: number) => {
 }
 
 const updateComment = async () => {
-  if (!editedCommentContent.value.trim()) {
-    alert('Comment cannot be empty.')
-    return
-  }
+  if (commentToEdit.value === null || !editedCommentContent.value.trim()) return
   try {
     const response = await axios.put(
       `${apiBaseUrl}/comments/${commentToEdit.value}`,
@@ -271,42 +343,50 @@ const updateComment = async () => {
       },
       {
         headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${token}`
         }
       }
     )
     if (response.status === 200) {
       alert('Comment updated successfully.')
       commentToEdit.value = null
-      editedCommentContent.value = ''
-      fetchPostDetails() // Refresh comments
+      fetchPostDetails()
     } else {
-      alert('Failed to update comment.')
-      console.error('Unexpected response status:', response.status, response.statusText)
+      alert('Failed to update the comment.')
     }
   } catch (err) {
-    const errorMsg = err.response
-      ? `Error ${err.response.status}: ${err.response.data.message || err.response.data}`
-      : `Error: ${err.message}`
-    alert('Failed to update comment.')
-    console.error('Update Comment Error:', errorMsg)
+    alert('Failed to update the comment.')
+    console.error('Update Comment Error:', err)
   }
 }
 
 const cancelEditComment = () => {
   commentToEdit.value = null
-  editedCommentContent.value = ''
 }
 
-const isPostOwner = () => {
-  const currentUserId = JSON.parse(localStorage.getItem('user') || '{}').id
-  return post.value && post.value.user.id === currentUserId
+const toggleLike = async (post: Post) => {
+  try {
+    const url = post.liked_by_user
+      ? `${apiBaseUrl}/posts/${post.slug}/unlike`
+      : `${apiBaseUrl}/posts/${post.slug}/like`
+    const response = await axios.post(url, null, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    })
+    if (response.status === 200) {
+      fetchPostDetails()
+    } else {
+      alert('Failed to update like status.')
+    }
+  } catch (err) {
+    alert('Failed to update like status.')
+    console.error('Toggle Like Error:', err)
+  }
 }
 
-const isCommentOwner = (commentUserId: number) => {
-  const currentUserId = JSON.parse(localStorage.getItem('user') || '{}').id
-  return commentUserId === currentUserId
+const isCommentOwner = (userId: number) => {
+  return userId === Number(localStorage.getItem('userId'))
 }
 
 onMounted(fetchPostDetails)
@@ -314,103 +394,169 @@ onMounted(fetchPostDetails)
 
 <style scoped>
 .post-details-page {
-  background-color: #e0f7fa; /* Light baby blue background */
-  color: #5a2a8f; /* Dark purple text color */
+  max-width: 800px;
+  margin: auto;
   padding: 20px;
-  font-family: Arial, sans-serif;
-  text-align: center; /* Center align the content */
-}
-
-.loading {
-  font-size: 1.5rem;
-  color: #5a2a8f;
-}
-
-.error {
-  color: red;
-  font-size: 1.125rem;
+  color: #333;
+  background: #f0f0f0;
 }
 
 .post-image {
-  max-width: 300px; /* Adjust the size as needed */
-  height: auto; /* Maintain aspect ratio */
-  border-radius: 10px;
-  margin: 0 auto; /* Center the image horizontally */
-  display: block; /* Make the image a block element */
-}
-
-.post-view,
-.edit-post-form,
-.comments-section {
-  background-color: #ffffff;
-  border-radius: 10px;
-  padding: 20px;
-  margin: 20px auto; /* Center the sections horizontally */
-  max-width: 800px; /* Limit the width of the sections */
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.edit-post-form,
-.comments-section {
-  background-color: #f3e5f5; /* Light purple background for the forms */
-}
-
-.form-group {
-  margin-bottom: 1rem;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 0.5rem;
-}
-
-.form-group input,
-.form-group textarea {
   width: 100%;
-  padding: 0.5rem;
-  border-radius: 5px;
-  border: 1px solid #ddd;
+  height: auto;
+  max-height: 300px;
+  object-fit: cover;
+  margin-bottom: 20px;
 }
 
-button.button {
-  background-color: #ab47bc; /* Purple button */
+.edit-post-form,
+.post-view {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.edit-post-form h2,
+.post-view h2 {
+  color: #4a4a4a;
+}
+
+.button {
+  background-color: #6a1b29;
   color: #fff;
   border: none;
+  padding: 10px 15px;
   border-radius: 5px;
-  padding: 10px 20px;
   cursor: pointer;
-  font-size: 1rem;
+  font-size: 16px;
   margin-right: 10px;
+  transition: background-color 0.3s;
 }
 
-button.button:hover {
-  background-color: #8e24aa; /* Darker purple on hover */
+.button:hover {
+  background-color: #9b2d3f;
+}
+
+.update-button {
+  background-color: #4a148c;
+}
+
+.update-button:hover {
+  background-color: #7b1fa2;
+}
+
+.cancel-button,
+.cancel-edit-comment-button {
+  background-color: #d32f2f;
+}
+
+.cancel-button:hover,
+.cancel-edit-comment-button:hover {
+  background-color: #f44336;
+}
+
+.delete-button {
+  background-color: #c62828;
+}
+
+.delete-button:hover {
+  background-color: #e53935;
+}
+
+.like-button {
+  background-color: #0288d1;
+}
+
+.like-button.liked {
+  background-color: #01579b;
+}
+
+.like-button:hover {
+  background-color: #039be5;
+}
+
+.liked-users ul {
+  list-style-type: none;
+  padding: 0;
+}
+
+.liked-users li {
+  background: #eee;
+  padding: 5px;
+  margin-bottom: 5px;
+  border-radius: 4px;
+}
+
+.comments-section {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.comment {
+  border-bottom: 1px solid #ddd;
+  padding: 10px 0;
+}
+
+.comment-actions .button {
+  margin-right: 5px;
+}
+
+.add-comment {
+  margin-top: 20px;
 }
 
 .add-comment textarea {
-  width: calc(100% - 22px); /* Adjust for padding and button */
+  width: 100%;
   padding: 10px;
-  margin-bottom: 10px;
-  border-radius: 5px;
   border: 1px solid #ddd;
+  border-radius: 5px;
 }
 
-.comment-actions,
-.actions {
-  margin-top: 10px;
+.add-comment-button {
+  background-color: #4a148c;
 }
 
-.comment-actions button,
-.actions button {
-  background-color: #d32f2f; /* Red button for delete actions */
+.add-comment-button:hover {
+  background-color: #7b1fa2;
 }
 
-.comment-actions button:hover,
-.actions button:hover {
-  background-color: #b71c1c; /* Darker red on hover */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.no-comments {
-  font-style: italic;
+.modal-content {
+  background: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.modal-content button {
+  background-color: #4a148c;
+  color: #fff;
+  border: none;
+  padding: 10px 15px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  margin: 5px;
+  transition: background-color 0.3s;
+}
+
+.modal-content button:hover {
+  background-color: #7b1fa2;
 }
 </style>

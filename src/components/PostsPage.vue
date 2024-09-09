@@ -18,7 +18,7 @@
 
     <!-- Search bar -->
     <div class="search-bar">
-      <input v-model="searchQuery" placeholder="Search posts..." />
+      <input v-model="searchQuery" placeholder="Search posts..." @input="onSearchInput" />
     </div>
 
     <!-- Sort Buttons -->
@@ -54,6 +54,14 @@
             <strong>Last Comment:</strong> {{ post.last_comment.content }}
           </p>
           <p><strong>Date:</strong> {{ new Date(post.created_at).toLocaleDateString() }}</p>
+
+          <!-- Like Button and Count -->
+          <div class="likes">
+            <button @click="toggleLike(post)" :class="{ liked: post.liked_by_user }">
+              {{ post.liked_by_user ? 'Unlike' : 'Like' }} ({{ post.likes_count }})
+            </button>
+          </div>
+
           <div v-if="post.belongs_to_user" class="actions">
             <router-link :to="{ name: 'EditPost', params: { slug: post.slug } }" class="edit"
               >Edit</router-link
@@ -79,6 +87,7 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import { useRouter } from 'vue-router'
+import { debounce } from 'lodash'
 
 // Import images
 import authenticImage from '@/assets/blue-img.jpeg'
@@ -92,6 +101,8 @@ interface Post {
   updated_at: string
   slug: string
   comments_count: number
+  likes_count: number
+  liked_by_user: boolean
   last_comment: Comment | null
   belongs_to_user: boolean
   image: string
@@ -116,8 +127,8 @@ const newPostTitle = ref('')
 const newPostContent = ref('')
 const newPostImage = ref<File | null>(null)
 
-// Fetch posts
-const fetchPosts = async () => {
+// Fetch posts from the API (supports search and rate limits)
+const fetchPosts = async (search = '') => {
   loading.value = true
   error.value = ''
   try {
@@ -130,11 +141,12 @@ const fetchPosts = async () => {
     const response = await axios.get('https://interns-blog.nafistech.com/api/posts', {
       headers: {
         Authorization: `Bearer ${token}`
-      }
+      },
+      params: { search }
     })
     if (response.status === 200) {
       posts.value = response.data.data
-      sortPosts(sortOrder.value) // Sort posts by default order (descending)
+      sortPosts(sortOrder.value) // Sort posts after fetching
     } else {
       error.value = `Error: ${response.statusText}`
     }
@@ -145,6 +157,11 @@ const fetchPosts = async () => {
     loading.value = false
   }
 }
+
+// Debounced search handler to minimize API calls
+const onSearchInput = debounce(() => {
+  fetchPosts(searchQuery.value)
+}, 500)
 
 // Create new post
 const createPost = async () => {
@@ -200,6 +217,31 @@ const sortPosts = (order: 'asc' | 'desc') => {
   })
 }
 
+// Toggle like for a post
+const toggleLike = async (post: Post) => {
+  const token = localStorage.getItem('token')
+  try {
+    const response = await axios.post(
+      `https://interns-blog.nafistech.com/api/posts/like/${post.slug}`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    )
+    if (response.status === 200) {
+      post.liked_by_user = !post.liked_by_user // Toggle liked state
+      post.likes_count = post.liked_by_user ? post.likes_count + 1 : post.likes_count - 1
+    } else {
+      alert('Failed to toggle like.')
+    }
+  } catch (err) {
+    console.error('Toggle Like Error:', err)
+    alert('Failed to toggle like.')
+  }
+}
+
 // Filter posts based on search query
 const filteredPosts = computed(() => {
   return posts.value.filter((post) =>
@@ -240,7 +282,7 @@ const deletePost = async (id: number) => {
   }
 }
 
-onMounted(fetchPosts)
+onMounted(() => fetchPosts())
 </script>
 
 <style scoped>
@@ -376,6 +418,17 @@ ul {
 
 .post-details p {
   margin: 5px 0;
+}
+
+.likes button {
+  background-color: transparent;
+  border: none;
+  color: #9370db;
+  cursor: pointer;
+}
+
+.likes button.liked {
+  color: red;
 }
 
 .actions {
